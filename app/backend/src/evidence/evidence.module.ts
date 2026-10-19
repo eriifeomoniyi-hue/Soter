@@ -13,6 +13,7 @@ import { CacheModule } from '../common/cache/cache.module';
 import { FingerprintService } from './fingerprint.service';
 import { MetricsModule } from '../observability/metrics/metrics.module';
 import { EvidenceMetricsScheduler } from './evidence-metrics.scheduler';
+import { LoggerModule } from '../logger/logger.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { EvidenceMetricsScheduler } from './evidence-metrics.scheduler';
     AuditModule,
     CacheModule,
     MetricsModule,
+    LoggerModule,
   ],
   controllers: [EvidenceController, UploadSessionController],
   providers: [

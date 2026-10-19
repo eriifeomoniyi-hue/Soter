@@ -3,6 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { EvidenceStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { MetricsService } from '../observability/metrics/metrics.service';
+import { ScheduledJobContextService } from '../logger/scheduled-job-context.service';
 
 /**
  * Periodically refreshes the evidence-queue SLA gauges so operators can see,
@@ -19,46 +20,56 @@ export class EvidenceMetricsScheduler {
   constructor(
     private readonly prisma: PrismaService,
     private readonly metricsService: MetricsService,
+    private readonly scheduledJobContext: ScheduledJobContextService,
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE, {
     name: 'evidence-queue-sla-metrics',
   })
   async refreshEvidenceQueueSlaMetrics(): Promise<void> {
-    try {
-      // Queue depth per status. Iterating the enum (not the query result)
-      // keeps label cardinality bounded and resets statuses that emptied.
-      const grouped = await this.prisma.evidenceQueueItem.groupBy({
-        by: ['status'],
-        _count: { _all: true },
-      });
-      const countByStatus = new Map<string, number>(
-        grouped.map(row => [row.status, row._count._all]),
-      );
-      for (const status of Object.values(EvidenceStatus)) {
-        this.metricsService.setEvidenceQueueDepth(
-          status,
-          countByStatus.get(status) ?? 0,
-        );
-      }
+    return this.scheduledJobContext.run(
+      'evidence-queue-sla-metrics',
+      async () => {
+        try {
+          // Queue depth per status. Iterating the enum (not the query result)
+          // keeps label cardinality bounded and resets statuses that emptied.
+          const grouped = await this.prisma.evidenceQueueItem.groupBy({
+            by: ['status'],
+            _count: { _all: true },
+          });
+          const countByStatus = new Map<string, number>(
+            grouped.map(row => [row.status, row._count._all]),
+          );
+          for (const status of Object.values(EvidenceStatus)) {
+            this.metricsService.setEvidenceQueueDepth(
+              status,
+              countByStatus.get(status) ?? 0,
+            );
+          }
 
-      // Age of the oldest item still pending review (0 when none pending).
-      const oldestPending = await this.prisma.evidenceQueueItem.findFirst({
-        where: { status: EvidenceStatus.pending },
-        orderBy: { createdAt: 'asc' },
-        select: { createdAt: true },
-      });
-      const oldestPendingAgeSeconds = oldestPending
-        ? Math.max(0, (Date.now() - oldestPending.createdAt.getTime()) / 1000)
-        : 0;
-      this.metricsService.setEvidenceQueueOldestPendingAgeSeconds(
-        oldestPendingAgeSeconds,
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      this.logger.error(
-        `Failed to refresh evidence queue SLA metrics: ${message}`,
-      );
-    }
+          // Age of the oldest item still pending review (0 when none pending).
+          const oldestPending = await this.prisma.evidenceQueueItem.findFirst({
+            where: { status: EvidenceStatus.pending },
+            orderBy: { createdAt: 'asc' },
+            select: { createdAt: true },
+          });
+          const oldestPendingAgeSeconds = oldestPending
+            ? Math.max(
+                0,
+                (Date.now() - oldestPending.createdAt.getTime()) / 1000,
+              )
+            : 0;
+          this.metricsService.setEvidenceQueueOldestPendingAgeSeconds(
+            oldestPendingAgeSeconds,
+          );
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : 'Unknown error';
+          this.logger.error(
+            `Failed to refresh evidence queue SLA metrics: ${message}`,
+          );
+        }
+      },
+    );
   }
 }

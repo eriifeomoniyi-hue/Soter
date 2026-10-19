@@ -8,12 +8,14 @@ import {
   ApiKeyExpiryProcessor,
   API_KEY_EXPIRY_QUEUE,
 } from './api-key-expiry.processor';
+import { LoggerModule } from '../logger/logger.module';
 
 const skipBackgroundJobs = process.env.SKIP_BACKGROUND_JOBS === 'true';
 
 @Module({
   imports: [
     PrismaModule,
+    LoggerModule,
     ...(skipBackgroundJobs
       ? []
       : [BullModule.registerQueue({ name: API_KEY_EXPIRY_QUEUE })]),

@@ -4,6 +4,7 @@ import { Job } from 'bullmq';
 import { RetentionPolicyService } from './retention-policy.service';
 import { IdempotencyKeyRetentionService } from './idempotency-key-retention.service';
 import { MetricsService } from '../observability/metrics/metrics.service';
+import { ScheduledJobContextService } from '../logger/scheduled-job-context.service';
 
 export const RETENTION_PURGE_QUEUE = 'retention-purge';
 export const IDEMPOTENCY_KEY_EXPIRY_SCOPE = 'idempotency-key-expiry';
@@ -17,6 +18,13 @@ export interface RetentionPurgeJobData {
   dryRun?: boolean;
   batchSize?: number;
   scope?: RetentionPurgeScope;
+  /**
+   * Correlation id of the run that enqueued this job (a scheduled run
+   * generates one at the start of every run). Workers adopt it so their log
+   * lines trace back to the originating run; when absent — e.g. jobs enqueued
+   * before this field existed — the worker generates its own.
+   */
+  correlationId?: string;
 }
 
 @Processor(RETENTION_PURGE_QUEUE)
@@ -27,11 +35,25 @@ export class RetentionPurgeProcessor extends WorkerHost {
     private readonly retentionService: RetentionPolicyService,
     private readonly idempotencyKeyRetentionService: IdempotencyKeyRetentionService,
     private readonly metrics: MetricsService,
+    private readonly scheduledJobContext: ScheduledJobContextService,
   ) {
     super();
   }
 
   async process(job: Job<RetentionPurgeJobData>): Promise<void> {
+    // Run the purge inside the originating run's correlation context (or a
+    // fresh one for jobs that arrived without an id) so every log line the
+    // purge emits carries the run's correlation id.
+    return this.scheduledJobContext.run(
+      `retention-purge:${job.data.scope ?? 'policies'}`,
+      () => this.executePurgeJob(job),
+      { correlationId: job.data.correlationId },
+    );
+  }
+
+  private async executePurgeJob(
+    job: Job<RetentionPurgeJobData>,
+  ): Promise<void> {
     this.logger.log(
       `Processing retention purge job ${job.id} (triggered by: ${job.data.triggeredBy})`,
     );

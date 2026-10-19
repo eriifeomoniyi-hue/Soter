@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { MetricsModule } from '../observability/metrics/metrics.module';
 import { PrismaModule } from '../prisma/prisma.module';
+import { LoggerModule } from '../logger/logger.module';
 import { ClaimVerificationReconciliationService } from './claim-verification-reconciliation.service';
 import { ClaimVerificationStateService } from './claim-verification-state.service';
 
@@ -15,7 +16,7 @@ import { ClaimVerificationStateService } from './claim-verification-state.servic
  * claims HTTP surface.
  */
 @Module({
-  imports: [PrismaModule, MetricsModule],
+  imports: [PrismaModule, MetricsModule, LoggerModule],
   providers: [
     ClaimVerificationStateService,
     ClaimVerificationReconciliationService,

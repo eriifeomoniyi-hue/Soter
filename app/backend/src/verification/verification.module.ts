@@ -21,6 +21,7 @@ import { EncryptionModule } from '../common/encryption/encryption.module';
 import { JobsModule } from '../jobs/jobs.module';
 import { DeploymentMetadataModule } from '../deployment-metadata/deployment-metadata.module';
 import { MetricsModule } from '../observability/metrics/metrics.module';
+import { LoggerModule } from '../logger/logger.module';
 
 const skipBackgroundJobs = process.env.SKIP_BACKGROUND_JOBS === 'true';
 
@@ -32,6 +33,7 @@ const skipBackgroundJobs = process.env.SKIP_BACKGROUND_JOBS === 'true';
     AuditModule,
     NotificationsModule,
     EncryptionModule,
+    LoggerModule,
     ...(skipBackgroundJobs
       ? []
       : [

@@ -19,6 +19,7 @@ import {
   ONCHAIN_ADAPTER_TOKEN,
 } from '../onchain/onchain.adapter';
 import { LoggerService } from '../logger/logger.service';
+import { ScheduledJobContextService } from '../logger/scheduled-job-context.service';
 import { MetricsService } from '../observability/metrics/metrics.service';
 import { AuditService } from '../audit/audit.service';
 import { EncryptionService } from '../common/encryption/encryption.service';
@@ -109,6 +110,7 @@ export class ClaimsService {
     private readonly sorobanTransactionService: SorobanTransactionLifecycleService,
     private readonly sorobanTransactionScheduler: SorobanTransactionScheduler,
     private readonly verificationService: VerificationService,
+    private readonly scheduledJobContext: ScheduledJobContextService,
   ) {
     this.onchainEnabled =
       this.configService.get<string>('ONCHAIN_ENABLED') === 'true';
@@ -438,15 +440,17 @@ export class ClaimsService {
 
   @Cron(CronExpression.EVERY_HOUR)
   async handleExpiredClaimsCron(): Promise<void> {
-    try {
-      await this.cleanupExpiredClaims();
-      await this.refreshFunnelGauges();
-    } catch (error) {
-      this.logger.error(
-        'Failed to clean up expired claims',
-        error instanceof Error ? error.stack : undefined,
-      );
-    }
+    return this.scheduledJobContext.run('expired-claims-cleanup', async () => {
+      try {
+        await this.cleanupExpiredClaims();
+        await this.refreshFunnelGauges();
+      } catch (error) {
+        this.logger.error(
+          'Failed to clean up expired claims',
+          error instanceof Error ? error.stack : undefined,
+        );
+      }
+    });
   }
 
   async cleanupExpiredClaims(now: Date = new Date()): Promise<{

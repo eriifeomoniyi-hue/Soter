@@ -6,6 +6,7 @@ import { AuditModule } from '../audit/audit.module';
 import { BullModule, InjectQueue } from '@nestjs/bullmq';
 import { InvitesProcessor, INVITE_EXPIRY_QUEUE } from './invites.processor';
 import { Queue } from 'bullmq';
+import { LoggerModule } from '../logger/logger.module';
 
 const skipBackgroundJobs = process.env.SKIP_BACKGROUND_JOBS === 'true';
 
@@ -13,6 +14,7 @@ const skipBackgroundJobs = process.env.SKIP_BACKGROUND_JOBS === 'true';
   imports: [
     PrismaModule,
     AuditModule,
+    LoggerModule,
     ...(skipBackgroundJobs
       ? []
       : [BullModule.registerQueue({ name: INVITE_EXPIRY_QUEUE })]),

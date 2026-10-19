@@ -14,6 +14,8 @@ import {
   ClaimVerificationReconciliationService,
 } from './claim-verification-reconciliation.service';
 import { ClaimVerificationStateService } from './claim-verification-state.service';
+import { LoggerService } from '../logger/logger.service';
+import { ScheduledJobContextService } from '../logger/scheduled-job-context.service';
 
 interface AuditRow {
   entityId: string;
@@ -77,6 +79,8 @@ describe('ClaimVerificationReconciliationService', () => {
       providers: [
         ClaimVerificationReconciliationService,
         ClaimVerificationStateService,
+        LoggerService,
+        ScheduledJobContextService,
         { provide: PrismaService, useValue: prismaMock },
         { provide: MetricsService, useValue: metricsMock },
         {
@@ -244,5 +248,38 @@ describe('ClaimVerificationReconciliationService', () => {
     );
 
     errorSpy.mockRestore();
+  });
+
+  it('carries the originating run correlation id on the report', async () => {
+    const jobContext = new ScheduledJobContextService(new LoggerService());
+    const scoped = new ClaimVerificationReconciliationService(
+      prismaMock as unknown as PrismaService,
+      service['claimVerificationState'],
+      metricsMock as unknown as MetricsService,
+      jobContext,
+    );
+
+    claimRows = [{ id: 'claim-1', status: ClaimStatus.verified }];
+
+    let runId: string | undefined;
+    const report = await jobContext.run(
+      'claim-verification-reconciliation',
+      async () => {
+        const result = await scoped.reconcile();
+        runId = jobContext.getCorrelationId();
+        return result;
+      },
+    );
+
+    expect(runId).toEqual(expect.any(String));
+    expect(report.correlationId).toBe(runId);
+  });
+
+  it('leaves the report correlation id unset when scanned outside a scheduled run', async () => {
+    claimRows = [{ id: 'claim-1', status: ClaimStatus.verified }];
+
+    const report = await service.reconcile();
+
+    expect(report.correlationId).toBeUndefined();
   });
 });

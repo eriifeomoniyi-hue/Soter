@@ -6,6 +6,8 @@ import {
 import { RetentionPurgeScheduler } from './retention-purge.scheduler';
 import { MetricsService } from '../observability/metrics/metrics.service';
 import { ConfigService } from '@nestjs/config';
+import { LoggerService } from '../logger/logger.service';
+import { ScheduledJobContextService } from '../logger/scheduled-job-context.service';
 
 describe('RetentionPurgeScheduler', () => {
   let queue: { add: jest.Mock };
@@ -20,6 +22,7 @@ describe('RetentionPurgeScheduler', () => {
       queue as unknown as Queue<RetentionPurgeJobData>,
       { get: jest.fn() } as unknown as ConfigService,
       metrics as unknown as MetricsService,
+      new ScheduledJobContextService(new LoggerService()),
     );
   });
 
@@ -33,8 +36,32 @@ describe('RetentionPurgeScheduler', () => {
         scope: IDEMPOTENCY_KEY_EXPIRY_SCOPE,
         triggeredBy: 'cron',
         timestamp: expect.any(Number),
+        correlationId: expect.any(String),
       }),
       expect.objectContaining({ attempts: 2 }),
+    );
+  });
+
+  it('gives every scheduled run its own correlation id', async () => {
+    await scheduler.scheduleIdempotencyKeyExpiryPurge();
+    await scheduler.scheduleIdempotencyKeyExpiryPurge();
+
+    const enqueuedIds = queue.add.mock.calls.map(
+      ([, data]: [string, { correlationId?: string }]) => data.correlationId,
+    );
+
+    expect(enqueuedIds[0]).toEqual(expect.any(String));
+    expect(enqueuedIds[1]).toEqual(expect.any(String));
+    expect(enqueuedIds[0]).not.toBe(enqueuedIds[1]);
+  });
+
+  it('stamps the daily purge job with the scheduling run correlation id', async () => {
+    await scheduler.scheduleDailyPurge();
+
+    expect(queue.add).toHaveBeenCalledWith(
+      'scheduled-purge',
+      expect.objectContaining({ correlationId: expect.any(String) }),
+      expect.anything(),
     );
   });
 

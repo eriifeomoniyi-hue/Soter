@@ -7,6 +7,8 @@ import {
 import { RetentionPolicyService } from './retention-policy.service';
 import { IdempotencyKeyRetentionService } from './idempotency-key-retention.service';
 import { MetricsService } from '../observability/metrics/metrics.service';
+import { LoggerService } from '../logger/logger.service';
+import { ScheduledJobContextService } from '../logger/scheduled-job-context.service';
 
 function makeJob(
   data: Partial<RetentionPurgeJobData>,
@@ -58,6 +60,7 @@ describe('RetentionPurgeProcessor', () => {
       retentionService as unknown as RetentionPolicyService,
       idempotencyService as unknown as IdempotencyKeyRetentionService,
       metrics as unknown as MetricsService,
+      new ScheduledJobContextService(new LoggerService()),
     );
   });
 
@@ -100,6 +103,44 @@ describe('RetentionPurgeProcessor', () => {
     expect(metrics.recordIdempotencyPurgeRun).toHaveBeenCalledWith('failed');
     expect(metrics.recordIdempotencyPurgeFailure).toHaveBeenCalledWith(
       'db timeout',
+    );
+  });
+
+  it('runs the purge inside the originating run correlation context', async () => {
+    const jobContext = new ScheduledJobContextService(new LoggerService());
+    const runSpy = jest.spyOn(jobContext, 'run');
+    const scopedProcessor = new RetentionPurgeProcessor(
+      retentionService as unknown as RetentionPolicyService,
+      idempotencyService as unknown as IdempotencyKeyRetentionService,
+      metrics as unknown as MetricsService,
+      jobContext,
+    );
+
+    await scopedProcessor.process(makeJob({ correlationId: 'origin-run-id' }));
+
+    expect(runSpy).toHaveBeenCalledWith(
+      'retention-purge:policies',
+      expect.any(Function),
+      { correlationId: 'origin-run-id' },
+    );
+  });
+
+  it('generates a correlation id for jobs that arrive without one', async () => {
+    const jobContext = new ScheduledJobContextService(new LoggerService());
+    const runSpy = jest.spyOn(jobContext, 'run');
+    const scopedProcessor = new RetentionPurgeProcessor(
+      retentionService as unknown as RetentionPolicyService,
+      idempotencyService as unknown as IdempotencyKeyRetentionService,
+      metrics as unknown as MetricsService,
+      jobContext,
+    );
+
+    await scopedProcessor.process(makeJob({}));
+
+    expect(runSpy).toHaveBeenCalledWith(
+      'retention-purge:policies',
+      expect.any(Function),
+      { correlationId: undefined },
     );
   });
 });

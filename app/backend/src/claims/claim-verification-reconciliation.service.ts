@@ -4,6 +4,7 @@ import { ClaimStatus } from '@prisma/client';
 
 import { MetricsService } from '../observability/metrics/metrics.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { ScheduledJobContextService } from '../logger/scheduled-job-context.service';
 import {
   ClaimStatusSnapshot,
   ClaimVerificationDrift,
@@ -37,6 +38,12 @@ export interface ClaimVerificationReconciliationReport {
   driftCount: number;
   drift: ClaimVerificationDriftEntry[];
   durationMs: number;
+  /**
+   * Correlation id of the run that produced this report. Populated when the
+   * scan runs inside a scheduled-job context, so an alert or notification
+   * built from the report can be traced back to its originating run's logs.
+   */
+  correlationId?: string;
 }
 
 /**
@@ -59,36 +66,42 @@ export class ClaimVerificationReconciliationService {
     private readonly prisma: PrismaService,
     private readonly claimVerificationState: ClaimVerificationStateService,
     private readonly metricsService: MetricsService,
+    private readonly scheduledJobContext: ScheduledJobContextService,
   ) {}
 
   @Cron(CronExpression.EVERY_HOUR)
   async handleClaimVerificationReconciliation(): Promise<void> {
-    try {
-      const report = await this.reconcile();
+    return this.scheduledJobContext.run(
+      'claim-verification-reconciliation',
+      async () => {
+        try {
+          const report = await this.reconcile();
 
-      if (report.driftCount > 0) {
-        const summary = report.drift
-          .map(entry => `${entry.claimId}=${entry.kind}`)
-          .join(', ');
+          if (report.driftCount > 0) {
+            const summary = report.drift
+              .map(entry => `${entry.claimId}=${entry.kind}`)
+              .join(', ');
 
-        this.logger.warn(
-          `Claim/verification reconciliation found ${report.driftCount} ` +
-            `drifted claim(s) of ${report.scanned} scanned in ` +
-            `${report.durationMs}ms: ${summary}`,
-        );
-        return;
-      }
+            this.logger.warn(
+              `Claim/verification reconciliation found ${report.driftCount} ` +
+                `drifted claim(s) of ${report.scanned} scanned in ` +
+                `${report.durationMs}ms: ${summary}`,
+            );
+            return;
+          }
 
-      this.logger.log(
-        `Claim/verification reconciliation clean ` +
-          `(${report.scanned} claim(s) scanned in ${report.durationMs}ms)`,
-      );
-    } catch (error) {
-      this.logger.error(
-        'Claim/verification reconciliation failed',
-        error instanceof Error ? error.stack : undefined,
-      );
-    }
+          this.logger.log(
+            `Claim/verification reconciliation clean ` +
+              `(${report.scanned} claim(s) scanned in ${report.durationMs}ms)`,
+          );
+        } catch (error) {
+          this.logger.error(
+            'Claim/verification reconciliation failed',
+            error instanceof Error ? error.stack : undefined,
+          );
+        }
+      },
+    );
   }
 
   /**
@@ -147,6 +160,7 @@ export class ClaimVerificationReconciliationService {
       driftCount: drift.length,
       drift,
       durationMs: Date.now() - startedAt,
+      correlationId: this.scheduledJobContext.getCorrelationId(),
     };
   }
 }

@@ -8,6 +8,7 @@ Use the backend `/metrics`, `/health`, `/api/v1/health`, and `/jobs/health` endp
 - Pass `x-correlation-id` on operator requests when investigating an incident.
 - Onchain BullMQ jobs copy the active request correlation ID into `job.data.correlationId`, so job logs can be matched back to the API request that queued the contract action.
 - Notification jobs already accept correlation IDs; use the same header value when enqueueing callbacks from request handlers.
+- Scheduled jobs (cron handlers and repeatable queue jobs) have no request to inherit from, so each run generates its own correlation ID at the start of the run. Every log line the run emits carries it, queued work (retention purge, Soroban cleanup, event correlation) reuses the originating run's ID via `job.data.correlationId`, and reports/notifications produced by the run include it — search logs by that ID to trace one scheduled run end to end.
 
 ## Metrics To Watch
 

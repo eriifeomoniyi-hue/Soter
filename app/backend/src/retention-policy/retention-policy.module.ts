@@ -11,6 +11,7 @@ import { IdempotencyKeyRetentionService } from './idempotency-key-retention.serv
 import { MetricsModule } from '../observability/metrics/metrics.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { AuditModule } from '../audit/audit.module';
+import { LoggerModule } from '../logger/logger.module';
 
 const skipBackgroundJobs = process.env.SKIP_BACKGROUND_JOBS === 'true';
 
@@ -19,6 +20,7 @@ const skipBackgroundJobs = process.env.SKIP_BACKGROUND_JOBS === 'true';
     PrismaModule,
     AuditModule,
     MetricsModule,
+    LoggerModule,
     ...(skipBackgroundJobs
       ? []
       : [BullModule.registerQueue({ name: RETENTION_PURGE_QUEUE })]),

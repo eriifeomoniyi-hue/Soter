@@ -4,6 +4,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { SorobanTransactionLifecycleService } from './soroban-transaction-lifecycle.service';
 import { MetricsService } from '../observability/metrics/metrics.service';
+import { ScheduledJobContextService } from '../logger/scheduled-job-context.service';
 
 export interface SorobanTransactionJobData {
   transactionId: string;
@@ -22,6 +23,7 @@ export class SorobanTransactionScheduler {
     private readonly sorobanQueue: Queue<SorobanTransactionJobData>,
     private readonly sorobanTransactionService: SorobanTransactionLifecycleService,
     private readonly metricsService: MetricsService,
+    private readonly scheduledJobContext: ScheduledJobContextService,
   ) {}
 
   /**
@@ -37,86 +39,94 @@ export class SorobanTransactionScheduler {
       return;
     }
 
-    this.isProcessingRetries = true;
-    const startTime = Date.now();
+    return this.scheduledJobContext.run(
+      'schedule-soroban-retries',
+      async () => {
+        this.isProcessingRetries = true;
+        const startTime = Date.now();
 
-    try {
-      const retryableTransactions =
-        await this.sorobanTransactionService.getRetryableTransactions();
+        try {
+          const retryableTransactions =
+            await this.sorobanTransactionService.getRetryableTransactions();
 
-      if (retryableTransactions.length === 0) {
-        this.logger.debug('No retryable Soroban transactions found');
-        return;
-      }
+          if (retryableTransactions.length === 0) {
+            this.logger.debug('No retryable Soroban transactions found');
+            return;
+          }
 
-      this.logger.log(
-        `Found ${retryableTransactions.length} retryable Soroban transactions`,
-      );
+          this.logger.log(
+            `Found ${retryableTransactions.length} retryable Soroban transactions`,
+          );
 
-      // Schedule jobs for each retryable transaction
-      const jobPromises = retryableTransactions.map(async transaction => {
-        const jobData: SorobanTransactionJobData = {
-          transactionId: transaction.id,
-          operation: 'retry',
-          correlationId: transaction.correlationId ?? undefined,
-        };
+          // Schedule jobs for each retryable transaction
+          const jobPromises = retryableTransactions.map(async transaction => {
+            const jobData: SorobanTransactionJobData = {
+              transactionId: transaction.id,
+              operation: 'retry',
+              correlationId: transaction.correlationId ?? undefined,
+            };
 
-        // Calculate delay based on nextRetryAt
-        const delay = transaction.nextRetryAt
-          ? Math.max(
-              0,
-              new Date(transaction.nextRetryAt).getTime() - Date.now(),
-            )
-          : 0;
+            // Calculate delay based on nextRetryAt
+            const delay = transaction.nextRetryAt
+              ? Math.max(
+                  0,
+                  new Date(transaction.nextRetryAt).getTime() - Date.now(),
+                )
+              : 0;
 
-        return this.sorobanQueue.add(`retry-${transaction.id}`, jobData, {
-          delay,
-          attempts: 3, // Job-level retries for the scheduler itself
-          backoff: {
-            type: 'exponential',
-            delay: 2000,
-          },
-          removeOnComplete: 100,
-          removeOnFail: 50,
-        });
-      });
+            return this.sorobanQueue.add(`retry-${transaction.id}`, jobData, {
+              delay,
+              attempts: 3, // Job-level retries for the scheduler itself
+              backoff: {
+                type: 'exponential',
+                delay: 2000,
+              },
+              removeOnComplete: 100,
+              removeOnFail: 50,
+            });
+          });
 
-      await Promise.all(jobPromises);
+          await Promise.all(jobPromises);
 
-      const duration = (Date.now() - startTime) / 1000;
+          const duration = (Date.now() - startTime) / 1000;
 
-      this.logger.log(
-        `Scheduled ${retryableTransactions.length} Soroban transaction retries in ${duration}s`,
-      );
+          this.logger.log(
+            `Scheduled ${retryableTransactions.length} Soroban transaction retries in ${duration}s`,
+          );
 
-      // Emit scheduling metrics
-      this.metricsService.incrementCounter(
-        'soroban_transaction_retries_scheduled',
-        {
-          count: retryableTransactions.length.toString(),
-        },
-      );
+          // Emit scheduling metrics
+          this.metricsService.incrementCounter(
+            'soroban_transaction_retries_scheduled',
+            {
+              count: retryableTransactions.length.toString(),
+            },
+          );
 
-      this.metricsService.recordHistogram(
-        'soroban_retry_scheduling_duration',
-        duration,
-      );
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      this.logger.error(
-        `Failed to schedule retryable Soroban transactions: ${errorMessage}`,
-        {
-          error: errorMessage,
-        },
-      );
+          this.metricsService.recordHistogram(
+            'soroban_retry_scheduling_duration',
+            duration,
+          );
+        } catch (error) {
+          const errorMessage =
+            error instanceof Error ? error.message : String(error);
+          this.logger.error(
+            `Failed to schedule retryable Soroban transactions: ${errorMessage}`,
+            {
+              error: errorMessage,
+            },
+          );
 
-      this.metricsService.incrementCounter('soroban_retry_scheduling_failed', {
-        error: errorMessage.substring(0, 100),
-      });
-    } finally {
-      this.isProcessingRetries = false;
-    }
+          this.metricsService.incrementCounter(
+            'soroban_retry_scheduling_failed',
+            {
+              error: errorMessage.substring(0, 100),
+            },
+          );
+        } finally {
+          this.isProcessingRetries = false;
+        }
+      },
+    );
   }
 
   /**
@@ -132,50 +142,57 @@ export class SorobanTransactionScheduler {
       return;
     }
 
-    this.isProcessingCleanup = true;
-    const startTime = Date.now();
+    return this.scheduledJobContext.run(
+      'cleanup-expired-soroban-transactions',
+      async () => {
+        this.isProcessingCleanup = true;
+        const startTime = Date.now();
 
-    try {
-      const jobData: SorobanTransactionJobData = {
-        transactionId: 'cleanup', // Special identifier for cleanup jobs
-        operation: 'cleanup',
-        correlationId: `cleanup-${Date.now()}`,
-      };
+        try {
+          const jobData: SorobanTransactionJobData = {
+            transactionId: 'cleanup', // Special identifier for cleanup jobs
+            operation: 'cleanup',
+            // The queued cleanup shares this run's correlation id so worker
+            // logs trace back to the cron run that scheduled them.
+            correlationId: this.scheduledJobContext.getCorrelationId(),
+          };
 
-      await this.sorobanQueue.add('cleanup-expired', jobData, {
-        attempts: 3,
-        backoff: {
-          type: 'exponential',
-          delay: 5000,
-        },
-        removeOnComplete: 10,
-        removeOnFail: 5,
-      });
+          await this.sorobanQueue.add('cleanup-expired', jobData, {
+            attempts: 3,
+            backoff: {
+              type: 'exponential',
+              delay: 5000,
+            },
+            removeOnComplete: 10,
+            removeOnFail: 5,
+          });
 
-      const duration = (Date.now() - startTime) / 1000;
+          const duration = (Date.now() - startTime) / 1000;
 
-      this.logger.debug(
-        `Scheduled Soroban transaction cleanup in ${duration}s`,
-      );
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      this.logger.error(
-        `Failed to schedule Soroban cleanup job: ${errorMessage}`,
-        {
-          error: errorMessage,
-        },
-      );
+          this.logger.debug(
+            `Scheduled Soroban transaction cleanup in ${duration}s`,
+          );
+        } catch (error) {
+          const errorMessage =
+            error instanceof Error ? error.message : String(error);
+          this.logger.error(
+            `Failed to schedule Soroban cleanup job: ${errorMessage}`,
+            {
+              error: errorMessage,
+            },
+          );
 
-      this.metricsService.incrementCounter(
-        'soroban_cleanup_scheduling_failed',
-        {
-          error: errorMessage.substring(0, 100),
-        },
-      );
-    } finally {
-      this.isProcessingCleanup = false;
-    }
+          this.metricsService.incrementCounter(
+            'soroban_cleanup_scheduling_failed',
+            {
+              error: errorMessage.substring(0, 100),
+            },
+          );
+        } finally {
+          this.isProcessingCleanup = false;
+        }
+      },
+    );
   }
 
   /**
@@ -186,18 +203,26 @@ export class SorobanTransactionScheduler {
     timeZone: 'UTC',
   })
   async detectStuckTransactions() {
-    try {
-      await this.sorobanTransactionService.detectStuckTransactions();
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      this.logger.error(
-        `Failed to detect stuck Soroban transactions: ${errorMessage}`,
-      );
-      this.metricsService.incrementCounter('soroban_stuck_detection_failed', {
-        error: errorMessage.substring(0, 100),
-      });
-    }
+    return this.scheduledJobContext.run(
+      'detect-stuck-soroban-transactions',
+      async () => {
+        try {
+          await this.sorobanTransactionService.detectStuckTransactions();
+        } catch (error) {
+          const errorMessage =
+            error instanceof Error ? error.message : String(error);
+          this.logger.error(
+            `Failed to detect stuck Soroban transactions: ${errorMessage}`,
+          );
+          this.metricsService.incrementCounter(
+            'soroban_stuck_detection_failed',
+            {
+              error: errorMessage.substring(0, 100),
+            },
+          );
+        }
+      },
+    );
   }
 
   /**
@@ -208,39 +233,51 @@ export class SorobanTransactionScheduler {
     timeZone: 'UTC',
   })
   async healthCheck() {
-    try {
-      const waiting = await this.sorobanQueue.getWaiting();
-      const active = await this.sorobanQueue.getActive();
-      const completed = await this.sorobanQueue.getCompleted();
-      const failed = await this.sorobanQueue.getFailed();
-      const delayed = await this.sorobanQueue.getDelayed();
+    return this.scheduledJobContext.run(
+      'soroban-queue-health-check',
+      async () => {
+        try {
+          const waiting = await this.sorobanQueue.getWaiting();
+          const active = await this.sorobanQueue.getActive();
+          const completed = await this.sorobanQueue.getCompleted();
+          const failed = await this.sorobanQueue.getFailed();
+          const delayed = await this.sorobanQueue.getDelayed();
 
-      // Emit queue health metrics
-      this.metricsService.setGauge('soroban_queue_waiting', waiting.length);
-      this.metricsService.setGauge('soroban_queue_active', active.length);
-      this.metricsService.setGauge('soroban_queue_completed', completed.length);
-      this.metricsService.setGauge('soroban_queue_failed', failed.length);
-      this.metricsService.setGauge('soroban_queue_delayed', delayed.length);
+          // Emit queue health metrics
+          this.metricsService.setGauge('soroban_queue_waiting', waiting.length);
+          this.metricsService.setGauge('soroban_queue_active', active.length);
+          this.metricsService.setGauge(
+            'soroban_queue_completed',
+            completed.length,
+          );
+          this.metricsService.setGauge('soroban_queue_failed', failed.length);
+          this.metricsService.setGauge('soroban_queue_delayed', delayed.length);
 
-      // Log warnings for concerning queue states
-      if (waiting.length > 100) {
-        this.logger.warn(
-          `High number of waiting Soroban transaction jobs: ${waiting.length}`,
-        );
-      }
+          // Log warnings for concerning queue states
+          if (waiting.length > 100) {
+            this.logger.warn(
+              `High number of waiting Soroban transaction jobs: ${waiting.length}`,
+            );
+          }
 
-      if (failed.length > 50) {
-        this.logger.warn(
-          `High number of failed Soroban transaction jobs: ${failed.length}`,
-        );
-      }
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      this.logger.error(`Soroban queue health check failed: ${errorMessage}`);
+          if (failed.length > 50) {
+            this.logger.warn(
+              `High number of failed Soroban transaction jobs: ${failed.length}`,
+            );
+          }
+        } catch (error) {
+          const errorMessage =
+            error instanceof Error ? error.message : String(error);
+          this.logger.error(
+            `Soroban queue health check failed: ${errorMessage}`,
+          );
 
-      this.metricsService.incrementCounter('soroban_queue_health_check_failed');
-    }
+          this.metricsService.incrementCounter(
+            'soroban_queue_health_check_failed',
+          );
+        }
+      },
+    );
   }
 
   /**

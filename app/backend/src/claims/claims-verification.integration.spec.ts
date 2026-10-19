@@ -11,6 +11,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { BudgetService } from '../common/budget/budget.service';
 import { ONCHAIN_ADAPTER_TOKEN } from '../onchain/onchain.adapter';
 import { LoggerService } from '../logger/logger.service';
+import { ScheduledJobContextService } from '../logger/scheduled-job-context.service';
 import { MetricsService } from '../observability/metrics/metrics.service';
 import { AuditService } from '../audit/audit.service';
 import { EncryptionService } from '../common/encryption/encryption.service';
@@ -84,6 +85,7 @@ describe('Claims -> verification pipeline integration', () => {
       providers: [
         ClaimsService,
         VerificationService,
+        ScheduledJobContextService,
         { provide: PrismaService, useValue: prismaMock },
         {
           provide: ConfigService,
